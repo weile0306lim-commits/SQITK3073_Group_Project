@@ -9,11 +9,15 @@ import joblib
 # =====================================================
 
 st.set_page_config(
-    page_title="Fuel Consumption Dashboard",
+    page_title="FuelSub Insight",
+    page_icon="⛽",
     layout="wide"
 )
 
-st.title("Fuel Consumption Prediction & Cost Impact Analytics Dashboard")
+st.title("⛽ FuelSub Insight")
+st.subheader(
+    "Fuel Consumption Prediction & Cost Impact Analytics Dashboard"
+)
 
 # =====================================================
 # Load Data and Model
