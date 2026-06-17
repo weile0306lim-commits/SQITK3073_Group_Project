@@ -3,7 +3,6 @@ import numpy as np
 import streamlit as st
 import plotly.express as px
 import joblib
-import requests
 
 # =====================================================
 # Page Setting
@@ -29,8 +28,7 @@ def load_data():
 @st.cache_resource
 def load_model():
     model = joblib.load("fuel_prediction_model.pkl")
-    metrics = joblib.load("fuel_prediction_metrics.pkl")
-    return model, metrics
+    return model
 
 
 @st.cache_data(ttl=3600)
@@ -76,7 +74,6 @@ live_prices = get_live_fuel_prices()
 
 RON95_MARKET_PRICE = live_prices["ron95_market_price"]
 DIESEL_MARKET_PRICE = live_prices["diesel_market_price"]
-RON97_MARKET_PRICE = live_prices["ron97_market_price"]
 FUEL_PRICE_DATE = live_prices["date"]
 
 
@@ -119,10 +116,6 @@ df["fuel_savings_rm"] = (
     df["fuel_l"] * df["saving_per_litre_rm"]
 )
 
-df["subsidized_cost_per_km_rm"] = (
-    df["subsidized_fuel_cost_rm"] / df["distance_km"]
-)
-
 # =====================================================
 # Sidebar
 # =====================================================
@@ -138,7 +131,6 @@ page = st.sidebar.selectbox(
     ]
 )
 
-# No filters
 filtered_df = df
 
 # =====================================================
@@ -149,7 +141,6 @@ if page == "Overview":
 
     st.header("Overview")
 
-    # Split petrol and diesel data
     petrol_df = filtered_df[filtered_df["fuel_type"].str.lower() == "petrol"]
     diesel_df = filtered_df[filtered_df["fuel_type"].str.lower() == "diesel"]
 
@@ -159,7 +150,6 @@ if page == "Overview":
     petrol_fuel = petrol_df["fuel_l"].sum()
     diesel_fuel = diesel_df["fuel_l"].sum()
 
-    # KPI Row 1
     col1, col2, col3, col4 = st.columns(4)
 
     col1.metric("Total Trips", f"{len(filtered_df):,}")
@@ -169,7 +159,6 @@ if page == "Overview":
 
     st.markdown("---")
 
-    # KPI Row 2
     col5, col6, col7, col8 = st.columns(4)
 
     col5.metric(
@@ -194,7 +183,6 @@ if page == "Overview":
 
     st.markdown("---")
 
-    # Pie chart: fuel consumption share
     fuel_type_share = (
         filtered_df.groupby("fuel_type")["fuel_l"]
         .sum()
@@ -248,17 +236,17 @@ elif page == "Fuel Consumption Analysis":
 
     st.plotly_chart(fig1, use_container_width=True)
 
-    filtered_df = filtered_df.copy()
+    temp_df = filtered_df.copy()
 
-    filtered_df["distance_range"] = pd.cut(
-        filtered_df["distance_km"],
+    temp_df["distance_range"] = pd.cut(
+        temp_df["distance_km"],
         bins=[0, 25, 50, 75, 100, 200],
         labels=["0-25 km", "26-50 km", "51-75 km", "76-100 km", "Above 100 km"],
         include_lowest=True
     )
 
     fuel_by_distance = (
-        filtered_df.groupby("distance_range", observed=False)
+        temp_df.groupby("distance_range", observed=False)
         .agg(average_fuel_l=("fuel_l", "mean"))
         .reset_index()
     )
@@ -451,22 +439,35 @@ elif page == "Fuel Consumption Prediction":
     st.header("Fuel Consumption Prediction")
 
     try:
-        model, metrics = load_model()
-
-        col1, col2, col3 = st.columns(3)
-
-        col1.metric("MAE", f"{metrics['MAE']:.2f}")
-        col2.metric("RMSE", f"{metrics['RMSE']:.2f}")
-        col3.metric("R² Score", f"{metrics['R2 Score']:.3f}")
-
-        st.markdown("---")
+        model = load_model()
 
         st.subheader("Enter Trip Details")
 
-        vehicle_type = st.selectbox("Vehicle Type", sorted(df["vehicle_type"].unique()))
-        fuel_type = st.selectbox("Fuel Type", sorted(df["fuel_type"].unique()))
-        distance_km = st.number_input("Distance (km)", min_value=1.0, value=50.0)
-        payload_kg = st.number_input("Payload (kg)", min_value=0.0, value=1000.0)
+        fuel_type = st.selectbox(
+            "Fuel Type",
+            sorted(df["fuel_type"].unique())
+        )
+
+        available_vehicle_types = sorted(
+            df[df["fuel_type"] == fuel_type]["vehicle_type"].unique()
+        )
+
+        vehicle_type = st.selectbox(
+            "Vehicle Type",
+            available_vehicle_types
+        )
+
+        distance_km = st.number_input(
+            "Distance (km)",
+            min_value=1.0,
+            value=50.0
+        )
+
+        payload_kg = st.number_input(
+            "Payload (kg)",
+            min_value=0.0,
+            value=1000.0
+        )
 
         input_data = pd.DataFrame({
             "vehicle_type": [vehicle_type],
@@ -479,10 +480,14 @@ elif page == "Fuel Consumption Prediction":
 
             predicted_fuel = model.predict(input_data)[0]
 
-            subsidized_cost = predicted_fuel * assign_subsidized_price(fuel_type)
-            market_cost = predicted_fuel * assign_market_price(fuel_type)
-            savings = market_cost - subsidized_cost
-            saving_per_litre = assign_market_price(fuel_type) - assign_subsidized_price(fuel_type)
+            subsidized_price = assign_subsidized_price(fuel_type)
+            market_price = assign_market_price(fuel_type)
+
+            subsidized_cost = predicted_fuel * subsidized_price
+            market_cost = predicted_fuel * market_price
+
+            saving_per_litre = market_price - subsidized_price
+            total_savings = predicted_fuel * saving_per_litre
 
             col1, col2, col3 = st.columns(3)
 
@@ -490,8 +495,19 @@ elif page == "Fuel Consumption Prediction":
             col2.info(f"Subsidized Cost: RM {subsidized_cost:.2f}")
             col3.warning(f"Live Market Cost: RM {market_cost:.2f}")
 
-            st.success(f"Saving per Litre: RM {saving_per_litre:.2f}/L")
-            st.success(f"Estimated Total Savings: RM {savings:.2f}")
+            st.markdown("---")
+
+            col4, col5 = st.columns(2)
+
+            col4.metric(
+                "Saving per Litre",
+                f"RM {saving_per_litre:.2f}/L"
+            )
+
+            col5.metric(
+                "Estimated Total Savings",
+                f"RM {total_savings:.2f}"
+            )
 
     except FileNotFoundError:
         st.error("Prediction model not found. Please run prediction_model.py first.")
